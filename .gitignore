@@ -1,0 +1,26 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Environments and dependencies
+.venv/
+venv/
+ENV/
+env/
+
+# IDEs and editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Scan outputs and temp files
+*.json
+*.csv
+*.txt
+!requirements.txt
+snapshots/
+*_abertas.txt
+open_streams.txt
