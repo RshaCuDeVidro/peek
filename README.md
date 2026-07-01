@@ -9,7 +9,7 @@ Find, identify, and verify RTSP cameras at scale. From a single IP to millions, 
 ## Quick start
 
 ```bash
-git clone https://github.com/yourusername/peek.git
+git clone https://github.com/RshaCuDeVidro/peek.git
 cd peek
 
 # Scan a file (IPs, CIDRs, or ranges, one per line)
