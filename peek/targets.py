@@ -1,9 +1,96 @@
-"""Parse target specifications: IP, CIDR, ranges, and port-per-target syntax."""
+"""Parse target specifications: IP, CIDR, ranges, Feistel sampling, and port-per-target syntax."""
 
+import hashlib
 import ipaddress
+import math
 import re
+import struct
 import subprocess
 import sys
+
+# ── Feistel cipher for pseudorandom IP sampling ─────────────────────────────
+
+class Feistel32:
+    """32-bit Feistel network — deterministic permutation of [0, 2^bits).
+
+    Encrypting 0, 1, 2, ..., N produces a pseudorandom sequence with no
+    duplicates, without materializing the entire range.  Used for uniform
+    sampling from large CIDR blocks.
+    """
+
+    def __init__(self, key: bytes, bits: int = 32, rounds: int = 8):
+        if bits % 2 != 0:
+            raise ValueError("bits must be even")
+        self.bits = bits
+        self.half = bits // 2
+        self.mask = (1 << bits) - 1
+        self.half_mask = (1 << self.half) - 1
+        self.rounds = rounds
+        self._subkeys = self._expand_key(key)
+
+    def _expand_key(self, key: bytes) -> list[bytes]:
+        """Derive per-round subkeys from master key."""
+        subkeys = []
+        for i in range(self.rounds):
+            subkeys.append(hashlib.sha256(key + struct.pack(">I", i)).digest())
+        return subkeys
+
+    def _round_fn(self, rhs: int, subkey: bytes) -> int:
+        """Round function F(right_half, subkey) → left_half-sized output."""
+        data = struct.pack(">I", rhs) + subkey
+        h = hashlib.sha256(data).digest()
+        # Take enough bytes to cover half_bits
+        val = int.from_bytes(h[:4], "big")
+        return val & self.half_mask
+
+    def encrypt(self, n: int) -> int:
+        """Encrypt integer n (0 <= n < 2^bits). Bijection."""
+        if n < 0 or n > self.mask:
+            raise ValueError(f"n out of range [0, {self.mask}]")
+        left = (n >> self.half) & self.half_mask
+        right = n & self.half_mask
+        for i in range(self.rounds):
+            f = self._round_fn(right, self._subkeys[i])
+            new_right = left ^ f
+            left = right
+            right = new_right
+        return (left << self.half) | right
+
+
+def _sample_cidr(net: ipaddress.IPv4Network, n: int, key: bytes | None = None) -> list[str]:
+    """Sample n pseudorandom IPs from a CIDR block using Feistel cycle-walking.
+
+    Deterministic — same key + CIDR + n always returns the same IPs.
+    """
+    if key is None:
+        key = str(net).encode()
+    hosts = list(net.hosts())
+    size = len(hosts)
+    base = int(hosts[0])
+
+    if n >= size:
+        return [str(h) for h in hosts]
+
+    # Find smallest power of 2 >= size for the Feistel domain
+    bits = max(2, math.ceil(math.log2(size)))
+    if bits % 2 != 0:
+        bits += 1
+
+    feistel = Feistel32(key, bits=bits)
+    domain = 1 << bits
+    ips: list[str] = []
+    seen: set[int] = set()
+
+    for i in range(domain):
+        if len(ips) >= n:
+            break
+        candidate = feistel.encrypt(i)
+        if candidate < size and candidate not in seen:
+            seen.add(candidate)
+            ips.append(str(ipaddress.IPv4Address(base + candidate)))
+
+    return ips
+
 
 # Matches: 192.168.1.1-192.168.1.50 or 10.0.0.1-50
 _RANGE_RE = re.compile(
@@ -39,7 +126,8 @@ def _expand_range(spec: str) -> list[str]:
     return ips
 
 
-def expand_target(raw: str, default_port: int = 554) -> list[tuple[str, int]]:
+def expand_target(raw: str, default_port: int = 554,
+                   sample_size: int | None = None) -> list[tuple[str, int]]:
     """Expand a single target spec into (ip, port) pairs.
 
     Supported formats:
@@ -48,6 +136,10 @@ def expand_target(raw: str, default_port: int = 554) -> list[tuple[str, int]]:
         - 192.168.1.0/24
         - 10.0.0.1-10.0.0.50
         - 10.0.0.1-50
+
+    If *sample_size* is set and a CIDR block has more hosts than that,
+    sample pseudorandomly via Feistel cycle-walking instead of expanding
+    all hosts (deterministic — same inputs always pick the same IPs).
     """
     raw = raw.split("#")[0].strip()
     if not raw:
@@ -62,6 +154,25 @@ def expand_target(raw: str, default_port: int = 554) -> list[tuple[str, int]]:
     # CIDR
     try:
         net = ipaddress.ip_network(raw, strict=False)
+
+        # IPv6 not supported — skip silently
+        if isinstance(net, ipaddress.IPv6Network):
+            print(f"Warning: skipping {raw} (IPv6 not supported)", file=sys.stderr)
+            return []
+
+        n_hosts = net.num_addresses - 2  # exclude network + broadcast
+
+        if sample_size and n_hosts > sample_size:
+            print(f"Sampling {sample_size:,} IPs from {raw} "
+                  f"({n_hosts:,} hosts, prefix /{net.prefixlen})", file=sys.stderr)
+            ips = _sample_cidr(net, sample_size)
+            return [(ip, port) for ip in ips]
+
+        if n_hosts > 65534 and net.prefixlen < 16:
+            print(f"Warning: skipping {raw} ({n_hosts:,} IPs, too large). "
+                  f"Use --sample N to sample, or --max-cidr {net.prefixlen} to allow.",
+                  file=sys.stderr)
+            return []
         return [(str(host), port) for host in net.hosts()]
     except ValueError:
         pass
@@ -77,7 +188,8 @@ def expand_target(raw: str, default_port: int = 554) -> list[tuple[str, int]]:
 
 def parse_targets(input_path: str | None = None,
                   extra: list[str] | None = None,
-                  default_port: int = 554) -> list[tuple[str, int]]:
+                  default_port: int = 554,
+                  sample_size: int | None = None) -> list[tuple[str, int]]:
     """Parse targets from file and/or CLI args. Deduplicates."""
     raw_specs: list[str] = []
 
@@ -102,7 +214,7 @@ def parse_targets(input_path: str | None = None,
     seen: set[tuple[str, int]] = set()
     targets: list[tuple[str, int]] = []
     for spec in raw_specs:
-        for ip, port in expand_target(spec, default_port):
+        for ip, port in expand_target(spec, default_port, sample_size):
             key = (ip, port)
             if key not in seen:
                 seen.add(key)

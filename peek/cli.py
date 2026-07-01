@@ -83,7 +83,7 @@ def print_banner() -> None:
     print(f"{C['BOLD']}{C['C']}╚{'═' * 72}╝{C['Z']}\n")
 
 
-def print_config(config: ScanConfig, n_creds: int) -> None:
+def print_config(config: ScanConfig, n_creds: int, sample: int | None = None) -> None:
     print(f"  {C['D']}Targets:     {len(config.targets)}{C['Z']}")
     print(f"  {C['D']}Paths:       {len(config.paths)}{C['Z']}")
     print(f"  {C['D']}Credentials: {n_creds}{C['Z']}")
@@ -91,6 +91,8 @@ def print_config(config: ScanConfig, n_creds: int) -> None:
     print(f"  {C['D']}Timeout:     {config.timeout}s{C['Z']}")
     print(f"  {C['D']}ONVIF:       {'ON' if config.onvif else 'OFF'}{C['Z']}")
     print(f"  {C['D']}Snapshots:   {'ON' if config.snapshot else 'OFF'}{C['Z']}")
+    if sample:
+        print(f"  {C['D']}Sample:      {sample:,} per CIDR{C['Z']}")
 
 
 def print_results(cameras: list[CameraResult], elapsed: float) -> None:
@@ -236,6 +238,12 @@ def main() -> None:
                         help="Target: IP, CIDR, or range (repeatable)")
     parser.add_argument("--asn", action="append", dest="asns",
                         help="ASN to fetch prefixes from (repeatable, e.g. --asn AS28573)")
+    parser.add_argument("--limit", type=int, default=0, dest="asn_limit",
+                        help="Max prefixes to use per ASN (0 = all)")
+    parser.add_argument("--max-cidr", type=int, default=16, dest="max_cidr",
+                        help="Skip prefixes larger than /N (default: 16)")
+    parser.add_argument("--sample", type=int, default=0, dest="sample_size", metavar="N",
+                        help="Sample N IPs from large CIDRs via Feistel (0 = expand all)")
     parser.add_argument("-w", "--workers", type=int, default=DEFAULT_WORKERS,
                         help=f"Concurrency (default: {DEFAULT_WORKERS})")
     parser.add_argument("-t", "--timeout", type=float, default=DEFAULT_TIMEOUT,
@@ -284,12 +292,19 @@ def main() -> None:
             print(f"  {C['D']}Fetching prefixes for {asn}...{C['Z']}", end="", flush=True)
             prefixes = expand_asn(asn)
             if prefixes:
+                if args.asn_limit and len(prefixes) > args.asn_limit:
+                    print(f"\r{C['D']}  {asn}: {len(prefixes)} prefixes, "
+                          f"using first {args.asn_limit}{C['Z']}    ")
+                    prefixes = prefixes[:args.asn_limit]
+                else:
+                    print(f"\r{C['D']}  {asn}: {len(prefixes)} prefixes fetched{C['Z']}    ")
                 extra_targets.extend(prefixes)
-                print(f"\r{C['D']}  {asn}: {len(prefixes)} prefixes fetched{C['Z']}    ")
             else:
                 print(f"\r{C['R']}  {asn}: no prefixes found{C['Z']}    ")
 
-    targets = parse_targets(args.input, extra_targets if extra_targets else None, args.port)
+    sample = args.sample_size if args.sample_size > 0 else None
+    targets = parse_targets(args.input, extra_targets if extra_targets else None,
+                            args.port, sample)
 
     config = ScanConfig(
         targets=targets, paths=paths, creds=creds,
@@ -299,7 +314,7 @@ def main() -> None:
     )
 
     print_banner()
-    print_config(config, len(creds))
+    print_config(config, len(creds), sample)
 
     t0 = time.monotonic()
     try:
