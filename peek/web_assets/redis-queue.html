@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Peek — Redis Queue Monitor</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <style>
+    /* Monitor-specific overrides */
+    .app-monitor {
+      display: grid;
+      grid-template-rows: 52px 1fr;
+      height: 100vh;
+      padding: 10px 14px;
+      gap: 10px;
+      overflow: hidden;
+    }
+    .monitor-grid {
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      gap: 10px;
+      min-height: 0;
+    }
+    .panel-left, .panel-right {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      min-height: 0;
+    }
+    .queue-list-wrap {
+      flex: 1;
+      overflow-y: auto;
+      padding: 14px;
+    }
+    .queue-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .queue-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-xs);
+      font-family: var(--font-mono);
+      font-size: 0.78rem;
+    }
+    .queue-item .ip {
+      color: var(--accent);
+      font-weight: 600;
+    }
+    .queue-item .port {
+      color: var(--cyan);
+    }
+    .queue-item .action-del {
+      color: var(--red);
+      cursor: pointer;
+      font-size: 1.1rem;
+      border: none;
+      background: transparent;
+      padding: 0 4px;
+    }
+    .queue-item .action-del:hover {
+      color: #fff;
+    }
+  </style>
+</head>
+<body>
+<div class="app-monitor">
+
+  <!-- ═══ TOP BAR ═══ -->
+  <header class="topbar">
+    <div class="topbar-left">
+      <div class="logo" onclick="location.href='/'" style="cursor:pointer">
+        <div class="logo-icon"></div>
+        <span class="logo-text">Peek</span>
+      </div>
+      <div class="divider"></div>
+      <div class="topbar-status">
+        <span id="queueName">reecanner:queue</span>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <button class="btn btn-secondary" onclick="location.href='/'">← Dashboard</button>
+    </div>
+  </header>
+
+  <!-- ═══ MONITOR BODY ═══ -->
+  <div class="monitor-grid">
+    
+    <!-- LEFT PANEL: Settings & Actions -->
+    <div class="panel-left">
+      <!-- Status Card -->
+      <div class="card">
+        <div class="card-head">Connection Status</div>
+        <div class="card-body">
+          <div class="field" style="margin-bottom:10px; display:flex; justify-content:space-between; font-size:.78rem;">
+            <span style="color:var(--text-secondary)">Redis Server</span>
+            <span id="connStatus" style="font-weight:700; color:var(--red)">Disconnected</span>
+          </div>
+          <div class="field" style="margin-bottom:10px; display:flex; justify-content:space-between; font-size:.78rem;">
+            <span style="color:var(--text-secondary)">Target Queue</span>
+            <span id="queueLength" style="font-family:var(--font-mono); font-weight:700; color:var(--accent)">0</span>
+          </div>
+          <div class="field" style="margin-bottom:10px; display:flex; justify-content:space-between; font-size:.78rem;">
+            <span style="color:var(--text-secondary)">Settings Endpoint</span>
+            <span id="connDetails" style="font-family:var(--font-mono); font-size:0.7rem; color:var(--text-muted)">localhost:6379</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Settings Form -->
+      <div class="card">
+        <div class="card-head">Redis Settings</div>
+        <div class="card-body" style="display:flex; flex-direction:column; gap:10px;">
+          <div class="field">
+            <label for="redisHost">Host URL</label>
+            <input type="text" id="redisHost" value="localhost">
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label for="redisPort">Port</label>
+              <input type="number" id="redisPort" value="6379">
+            </div>
+            <div class="field">
+              <label for="redisDb">DB Index</label>
+              <input type="number" id="redisDb" value="0">
+            </div>
+          </div>
+          <div class="toggle-row" style="margin-bottom: 5px;">
+            <span style="font-size:0.78rem;">Continuous Scan</span>
+            <label class="toggle">
+              <input type="checkbox" id="redisContinuous">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <button class="btn btn-primary" onclick="saveSettings()">Save Configuration</button>
+        </div>
+      </div>
+
+      <!-- Action Card -->
+      <div class="card">
+        <div class="card-head">Queue Controls</div>
+        <div class="card-body" style="display:flex; flex-direction:column; gap:10px;">
+          <div class="field">
+            <label for="pushTarget">Add Test Target</label>
+            <div style="display:flex; gap:6px;">
+              <input type="text" id="pushTarget" placeholder="192.168.1.10:554" style="flex:1;">
+              <button class="btn btn-secondary" onclick="pushTarget()" style="padding:0 12px;">Push</button>
+            </div>
+          </div>
+          <div class="field">
+            <label for="refreshInterval">Interval (seconds)</label>
+            <select id="refreshInterval" onchange="onIntervalChange(this.value)">
+              <option value="500">0.5s (Fast)</option>
+              <option value="1000" selected>1s (Normal)</option>
+              <option value="2000">2s (Slow)</option>
+              <option value="5000">5s (Battery Safe)</option>
+            </select>
+          </div>
+          <button class="btn btn-danger" onclick="clearQueue()">🗑 Clear Queue (Delete)</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT PANEL: Real-time List -->
+    <div class="panel-right">
+      <div class="card" style="display:flex; flex-direction:column; flex:1; min-height:0;">
+        <div class="results-toolbar" style="border-bottom: 1px solid var(--border); flex-wrap:nowrap;">
+          <h3 style="flex:1;">Queue Elements <span id="queueCountBadge" style="font-size:0.7rem; padding: 2px 6px; background:var(--bg-input); border-radius:4px; color:var(--accent); font-weight:700; margin-left:6px;">0</span></h3>
+          <div class="topbar-search" style="max-width:300px; margin:0;">
+            <svg fill="none" viewBox="0 0 24 24" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+            <input type="text" id="queueFilter" placeholder="Filter current page IPs..." oninput="onFilterChange(this.value)">
+          </div>
+          <button class="btn btn-secondary" id="btnPause" onclick="togglePause()" style="padding: 6px 14px; font-size:0.72rem; margin-left:10px;">Pause Monitoring</button>
+        </div>
+        
+        <!-- Visible Items -->
+        <div class="queue-list-wrap">
+          <div class="queue-list" id="queueList">
+            <div class="history-empty">Connecting to Redis...</div>
+          </div>
+        </div>
+
+        <!-- Pagination Bar -->
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:10px 14px; border-top:1px solid var(--border); font-size:0.75rem; background: rgba(255,255,255,0.01);">
+          <div style="display:flex; gap:10px; align-items:center;">
+            <span style="color:var(--text-secondary)">Show</span>
+            <select id="limitSelect" onchange="onLimitChange(this.value)" style="padding:4px 8px; background:var(--bg-input); border:1px solid var(--border); border-radius:4px; color:var(--text-primary); font-family:var(--font-mono); font-size:0.72rem;">
+              <option value="25">25</option>
+              <option value="50" selected>50</option>
+              <option value="100">100</option>
+              <option value="250">250</option>
+            </select>
+            <span style="color:var(--text-secondary)">per page</span>
+          </div>
+          <div style="display:flex; gap:8px; align-items:center;">
+            <button class="btn btn-secondary" id="btnPrevPage" onclick="prevPage()" style="padding:4px 10px; font-size:0.7rem;" disabled>Prev</button>
+            <span id="pageIndicator" style="font-family:var(--font-mono); color:var(--text-secondary)">Page 1 of 1</span>
+            <button class="btn btn-secondary" id="btnNextPage" onclick="nextPage()" style="padding:4px 10px; font-size:0.7rem;" disabled>Next</button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+
+</div>
+
+<!-- Toast Container -->
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+  let refreshTimer = null;
+  let isPaused = false;
+  let intervalMs = 1000;
+  let filterText = '';
+  
+  // Pagination State
+  let currentPage = 1;
+  let limitPerPage = 50;
+  let totalCount = 0;
+  let queueItems = [];
+
+  const $ = id => document.getElementById(id);
+  const toastContainer = $('toastContainer');
+
+  function toast(msg, type = 'info') {
+    const t = document.createElement('div');
+    t.className = `toast toast-${type}`;
+    t.innerHTML = `<span class="toast-dot"></span><span>${msg}</span>`;
+    toastContainer.appendChild(t);
+    setTimeout(() => { t.classList.add('fade-out'); setTimeout(() => t.remove(), 300); }, 3000);
+  }
+
+  window.addEventListener('DOMContentLoaded', () => {
+    loadSettings();
+    startPolling();
+  });
+
+  async function loadSettings() {
+    try {
+      const r = await fetch('/api/redis-settings');
+      if (r.ok) {
+        const data = await r.json();
+        $('redisHost').value = data.host || 'localhost';
+        $('redisPort').value = data.port || 6379;
+        $('redisDb').value = data.db || 0;
+        $('redisContinuous').checked = !!data.continuous;
+      }
+    } catch(e){}
+  }
+
+  async function saveSettings() {
+    // Read other parameters from settings if exists to avoid overwriting them
+    let existing = {};
+    try {
+      const g = await fetch('/api/redis-settings');
+      if (g.ok) existing = await g.json();
+    } catch(e){}
+
+    const payload = {
+      ...existing,
+      host: $('redisHost').value.trim(),
+      port: parseInt($('redisPort').value) || 6379,
+      db: parseInt($('redisDb').value) || 0,
+      continuous: $('redisContinuous').checked
+    };
+    try {
+      const r = await fetch('/api/redis-settings', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+      });
+      if (r.ok) {
+        toast('Configuration saved successfully!', 'success');
+        pollQueue();
+      } else {
+        const err = await r.json();
+        toast('Failed to save: ' + (err.message || 'Unknown error'), 'error');
+      }
+    } catch(e) {
+      toast('Network error: ' + e.message, 'error');
+    }
+  }
+
+  function startPolling() {
+    if (refreshTimer) clearInterval(refreshTimer);
+    refreshTimer = setInterval(pollQueue, intervalMs);
+    pollQueue();
+  }
+
+  function onIntervalChange(val) {
+    intervalMs = parseInt(val);
+    startPolling();
+  }
+
+  function togglePause() {
+    isPaused = !isPaused;
+    const btn = $('btnPause');
+    if (isPaused) {
+      btn.textContent = 'Resume Monitoring';
+      btn.classList.add('btn-primary');
+      btn.classList.remove('btn-secondary');
+      toast('Monitoring paused.', 'warning');
+    } else {
+      btn.textContent = 'Pause Monitoring';
+      btn.classList.add('btn-secondary');
+      btn.classList.remove('btn-primary');
+      toast('Monitoring resumed.', 'success');
+      pollQueue();
+    }
+  }
+
+  async function pollQueue() {
+    if (isPaused) return;
+
+    try {
+      const r = await fetch(`/api/redis-queue-details?page=${currentPage}&limit=${limitPerPage}`);
+      if (r.ok) {
+        const d = await r.json();
+        if (d.connected) {
+          $('connStatus').textContent = 'Connected';
+          $('connStatus').style.color = 'var(--green)';
+          $('queueLength').textContent = d.queue_length;
+          $('queueCountBadge').textContent = d.queue_length;
+          $('connDetails').textContent = `${d.host}:${d.port} (DB ${d.db})`;
+          
+          totalCount = d.queue_length;
+          queueItems = d.items || [];
+          
+          updatePaginationUI();
+          renderQueue();
+        } else {
+          $('connStatus').textContent = 'Error';
+          $('connStatus').style.color = 'var(--red)';
+          $('queueLength').textContent = '0';
+          $('queueCountBadge').textContent = '0';
+          $('connDetails').textContent = `${d.host}:${d.port} (DB ${d.db})`;
+          $('queueList').innerHTML = `<div class="history-empty" style="color:var(--red)">Connection Error: ${d.error || 'Check details'}</div>`;
+        }
+      }
+    } catch(e) {
+      $('connStatus').textContent = 'Disconnected';
+      $('connStatus').style.color = 'var(--red)';
+      $('queueList').innerHTML = `<div class="history-empty" style="color:var(--red)">Network Error: ${e.message}</div>`;
+    }
+  }
+
+  function updatePaginationUI() {
+    const totalPages = Math.max(1, Math.ceil(totalCount / limitPerPage));
+    if (currentPage > totalPages) currentPage = totalPages;
+
+    $('pageIndicator').textContent = `Page ${currentPage} of ${totalPages}`;
+    $('btnPrevPage').disabled = (currentPage === 1);
+    $('btnNextPage').disabled = (currentPage === totalPages);
+  }
+
+  function prevPage() {
+    if (currentPage > 1) {
+      currentPage--;
+      pollQueue();
+    }
+  }
+
+  function nextPage() {
+    const totalPages = Math.ceil(totalCount / limitPerPage);
+    if (currentPage < totalPages) {
+      currentPage++;
+      pollQueue();
+    }
+  }
+
+  function onLimitChange(val) {
+    limitPerPage = parseInt(val);
+    currentPage = 1;
+    pollQueue();
+  }
+
+  function onFilterChange(val) {
+    filterText = val.toLowerCase().trim();
+    renderQueue();
+  }
+
+  function renderQueue() {
+    const listEl = $('queueList');
+    listEl.innerHTML = '';
+
+    const filtered = queueItems.filter(item => item.toLowerCase().includes(filterText));
+
+    if (filtered.length === 0) {
+      listEl.innerHTML = `<div class="history-empty">No matching targets on this page.</div>`;
+      return;
+    }
+
+    filtered.forEach(item => {
+      let ip = item, port = '554';
+      if (item.includes(':')) {
+        const pts = item.split(':');
+        ip = pts[0]; port = pts[1];
+      }
+      const row = document.createElement('div');
+      row.className = 'queue-item';
+      row.innerHTML = `
+        <div>
+          <span class="ip">${ip}</span>:<span class="port">${port}</span>
+        </div>
+        <button class="action-del" onclick="deleteTarget('${item}')" title="Delete target from queue">×</button>
+      `;
+      listEl.appendChild(row);
+    });
+  }
+
+  async function pushTarget() {
+    const input = $('pushTarget');
+    const target = input.value.trim();
+    if (!target) return;
+
+    try {
+      const r = await fetch('/api/redis-push', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ target })
+      });
+      if (r.ok) {
+        toast(`Pushed target ${target} to queue!`, 'success');
+        input.value = '';
+        pollQueue();
+      } else {
+        toast('Failed to push target.', 'error');
+      }
+    } catch(e) {
+      toast(e.message, 'error');
+    }
+  }
+
+  async function clearQueue() {
+    if (!confirm('Are you sure you want to completely clear (delete) the Redis queue list?')) return;
+    try {
+      const r = await fetch('/api/redis-clear', { method: 'POST' });
+      if (r.ok) {
+        toast('Redis target queue cleared.', 'success');
+        currentPage = 1;
+        pollQueue();
+      } else {
+        toast('Failed to clear queue.', 'error');
+      }
+    } catch(e) {
+      toast(e.message, 'error');
+    }
+  }
+
+  async function deleteTarget(target) {
+    toast('Individual deletions not supported natively. Clear queue or pull target.', 'warning');
+  }
+</script>
+</body>
+</html>

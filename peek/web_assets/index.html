@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Peek — RTSP Scanner</title>
+  <meta name="description" content="RTSP/IP camera scanner with professional dashboard">
+  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+</head>
+<body>
+<div class="app">
+
+  <!-- ═══ TOP BAR ═══ -->
+  <header class="topbar">
+    <div class="topbar-left">
+      <div class="logo">
+        <div class="logo-icon"></div>
+        <span class="logo-text">Peek</span>
+      </div>
+      <div class="divider"></div>
+      <div class="topbar-status">
+        <span class="status-dot" id="statusDot"></span>
+        <span id="statusLabel">Ready</span>
+      </div>
+    </div>
+
+    <!-- Search -->
+    <div class="topbar-search">
+      <svg fill="none" viewBox="0 0 24 24" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+      <input type="text" id="searchInput" placeholder="Search by IP, manufacturer, status..." oninput="onSearch(this.value)">
+    </div>
+
+    <!-- Actions -->
+    <div class="topbar-right">
+      <div class="stat-chip">Targets <span class="v pink" id="statTotal">0</span></div>
+      <div class="stat-chip">Open <span class="v green" id="statOpen">0</span></div>
+      <div class="stat-chip">Auth <span class="v yellow" id="statAuth">0</span></div>
+
+      <div class="divider"></div>
+
+      <button class="icon-btn" id="btnExportCSV" onclick="exportCSV()" title="Export CSV">
+        <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+        <span class="tip">CSV</span>
+      </button>
+      <button class="icon-btn" id="btnExportJSON" onclick="exportJSON()" title="Export JSON">
+        <svg viewBox="0 0 24 24"><path d="M16 18l6-6-6-6"/><path d="M8 6l-6 6 6 6"/></svg>
+        <span class="tip">JSON</span>
+      </button>
+      <button class="icon-btn" id="btnReport" onclick="generateReport()" title="Report">
+        <svg viewBox="0 0 24 24"><path d="M9 17H7v-7h2zm4 0h-2V7h2zm4 0h-2v-4h2zM5 3h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2z"/></svg>
+        <span class="tip">Report</span>
+      </button>
+      <button class="icon-btn" id="btnHistory" onclick="toggleHistory()" title="History">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        <span class="tip">History</span>
+      </button>
+      <button class="icon-btn" id="btnSettings" onclick="toggleSettings()" title="Settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+        <span class="tip">Settings</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- ═══ MAIN ═══ -->
+  <main class="main" id="mainGrid">
+
+    <!-- SIDEBAR -->
+    <aside class="sidebar">
+      <div class="card">
+        <div class="card-head">Scan Config <span class="badge" id="scanModeBadge">Manual</span></div>
+        <div class="card-body">
+          <div class="field" style="margin-bottom: 8px;">
+            <label for="targetSource">Target Source</label>
+            <select id="targetSource" onchange="onSourceChange(this.value)">
+              <option value="manual">Manual Input</option>
+              <option value="redis">Redis Queue (reecanner)</option>
+            </select>
+          </div>
+          <div class="field" id="targetsField">
+            <label for="targets">Targets</label>
+            <textarea id="targets" placeholder="192.168.1.0/24&#10;10.0.0.1&#10;cameras.txt"></textarea>
+          </div>
+          <div class="field" id="redisStatusField" style="display:none; margin-bottom: 10px; padding: 8px 10px; background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius-xs);">
+            <div style="display:flex; justify-content:space-between; font-size:.72rem; margin-bottom: 4px;">
+              <span style="color:var(--text-secondary)">Queue Status</span>
+              <span id="redisStatusBadge" style="color:var(--red); font-weight:600;">Disconnected</span>
+            </div>
+            <div style="display:flex; justify-content:space-between; font-size:.72rem;">
+              <span style="color:var(--text-secondary)">Targets Count</span>
+              <span id="redisQueueCount" style="font-family:var(--font-mono); font-weight:700; color:var(--accent);">0</span>
+            </div>
+          </div>
+          <div class="field-row">
+            <div class="field"><label for="ports">Ports</label><input id="ports" value="554"></div>
+            <div class="field"><label for="threads">Threads</label><input id="threads" type="number" value="50" min="1" max="500"></div>
+          </div>
+          <div class="toggle-row"><span>Snapshot</span><label class="toggle"><input type="checkbox" id="chkScreenshot" checked><span class="toggle-slider"></span></label></div>
+          <div class="toggle-row"><span>GeoIP</span><label class="toggle"><input type="checkbox" id="chkGeoip" checked><span class="toggle-slider"></span></label></div>
+          <div class="toggle-row"><span>AI Detect</span><label class="toggle"><input type="checkbox" id="chkAI"><span class="toggle-slider"></span></label></div>
+          <div class="btn-actions">
+            <button class="btn btn-primary" id="btnScan" onclick="startScan()"><svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>Start Scan</button>
+            <button class="btn btn-danger" id="btnStop" onclick="stopScan()" disabled>Stop</button>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head">Local Network <span class="badge">UDP</span></div>
+        <div class="card-body">
+          <button class="btn btn-secondary" onclick="runDiscovery()" style="width:100%"><svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>Discover Devices</button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- DASHBOARD -->
+    <div class="dashboard">
+      <!-- Progress -->
+      <div class="progress-wrapper">
+        <span class="progress-label">Progress</span>
+        <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+        <span class="progress-pct" id="progressPct">0%</span>
+      </div>
+
+      <!-- Widgets 4-Column Balanced Layout -->
+      <div class="widgets">
+        <!-- Console -->
+        <div class="card console-card">
+          <span class="widget-label">Console</span>
+          <div class="console" id="console"><div class="ln ok">» Peek scanner ready.</div></div>
+        </div>
+        <!-- Map -->
+        <div class="card map-card">
+          <span class="widget-label">Map</span>
+          <div id="map"></div>
+        </div>
+        <!-- Status Card -->
+        <div class="card status-card">
+          <span class="widget-label">Camera Status</span>
+          <div class="chart-wrap">
+            <canvas id="statusChart"></canvas>
+          </div>
+        </div>
+        <!-- Speed Card -->
+        <div class="card speed-card">
+          <span class="widget-label">Scan Rate</span>
+          <div class="chart-wrap">
+            <canvas id="speedChart"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- Results -->
+      <div class="results">
+        <div class="card">
+          <div class="results-toolbar">
+            <h3>Results</h3>
+            <div class="filter-tabs">
+              <button class="filter-tab active" data-filter="all">All</button>
+              <button class="filter-tab" data-filter="open">Open</button>
+              <button class="filter-tab" data-filter="auth">Auth</button>
+            </div>
+            <select class="group-select" id="groupSelect" onchange="onGroupChange(this.value)">
+              <option value="none">No Grouping</option>
+              <option value="make">By Manufacturer</option>
+              <option value="subnet">By Subnet</option>
+              <option value="status">By Status</option>
+            </select>
+          </div>
+          <div class="results-grid-wrap" id="resultsWrap"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- DETAIL PANEL -->
+    <aside class="detail-panel" id="detailPanel">
+      <div class="dp-header">
+        <h3 id="dpTitle">Details</h3>
+        <button class="dp-close" onclick="closeDetail()">×</button>
+      </div>
+      <div id="dpContent"></div>
+    </aside>
+
+  </main>
+
+  <!-- Activity Bar -->
+  <div class="activity-bar">
+    <span class="activity-dot"></span>
+    <span id="activityText">Awaiting scan...</span>
+  </div>
+
+</div>
+
+<!-- Toast Container -->
+<div class="toast-container" id="toastContainer"></div>
+
+<!-- Live Modal -->
+<div class="modal-overlay" id="liveModal">
+  <div class="modal-box">
+    <div class="modal-top"><span id="modalTitle">Live</span><button class="modal-close" onclick="closeLive()">×</button></div>
+    <div class="modal-video" id="modalVideo"><span class="fallback">Loading...</span></div>
+  </div>
+</div>
+
+<!-- History Modal -->
+<div class="modal-overlay" id="historyModal">
+  <div class="modal-box">
+    <div class="modal-top"><span>Scan History</span><button class="modal-close" onclick="toggleHistory()">×</button></div>
+    <div class="modal-body" id="historyBody"><div class="history-empty">No scans recorded.</div></div>
+  </div>
+</div>
+
+<!-- Settings Modal -->
+<div class="modal-overlay" id="settingsModal">
+  <div class="modal-box" style="max-width: 420px;">
+    <div class="modal-top"><span>Application Settings</span><button class="modal-close" onclick="toggleSettings()">×</button></div>
+    <div class="modal-body" style="display:flex; flex-direction:column; gap:12px;">
+      <!-- Redis Config Section -->
+      <div style="border-bottom: 1px solid var(--border); padding-bottom:12px;">
+        <h4 style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px;">Redis Connection</h4>
+        <div class="field" style="margin-bottom:8px;">
+          <label for="setRedisHost">Host URL</label>
+          <input type="text" id="setRedisHost" value="localhost">
+        </div>
+        <div class="field-row" style="margin-bottom:8px;">
+          <div class="field">
+            <label for="setRedisPort">Port</label>
+            <input type="number" id="setRedisPort" value="6379">
+          </div>
+          <div class="field">
+            <label for="setRedisDb">DB Index</label>
+            <input type="number" id="setRedisDb" value="0">
+          </div>
+        </div>
+        <div class="toggle-row" style="margin-top:6px;">
+          <span style="font-size:0.78rem; color:var(--text-secondary)">Continuous Queue Scan</span>
+          <label class="toggle">
+            <input type="checkbox" id="setRedisContinuous">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <p style="font-size:0.62rem; color:var(--text-muted); margin-top:6px; line-height:1.4;">
+          When active, Peek will continuously scan incoming targets from the Redis queue while a scan is running.
+        </p>
+      </div>
+
+      <!-- AI Object Detection Settings -->
+      <div style="border-bottom: 1px solid var(--border); padding-bottom:12px;">
+        <h4 style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px;">AI Object Detection</h4>
+        <div class="toggle-row" style="margin-bottom:6px;">
+          <span style="font-size:0.78rem; color:var(--text-secondary)">Face Recognition Cascade</span>
+          <label class="toggle">
+            <input type="checkbox" id="setAIDetectFace" checked>
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <div class="toggle-row">
+          <span style="font-size:0.78rem; color:var(--text-secondary)">Person Detection Cascade</span>
+          <label class="toggle">
+            <input type="checkbox" id="setAIDetectPerson" checked>
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+      </div>
+
+      <!-- Auto-Export Settings -->
+      <div style="border-bottom: 1px solid var(--border); padding-bottom:12px;">
+        <h4 style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px;">Auto-Export on Completion</h4>
+        <div class="toggle-row" style="margin-bottom:6px;">
+          <span style="font-size:0.78rem; color:var(--text-secondary)">Auto Export JSON</span>
+          <label class="toggle">
+            <input type="checkbox" id="setAutoExportJson">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <div class="toggle-row">
+          <span style="font-size:0.78rem; color:var(--text-secondary)">Auto Export CSV</span>
+          <label class="toggle">
+            <input type="checkbox" id="setAutoExportCsv">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <p style="font-size:0.62rem; color:var(--text-muted); margin-top:6px; line-height:1.4;">
+          Files are automatically saved in the "exports" directory on the scanner host.
+        </p>
+      </div>
+
+      <!-- Actions -->
+      <div style="display:flex; flex-direction:column; gap:8px; margin-top:6px;">
+        <button class="btn btn-primary" onclick="saveWebSettings()">Save Configuration</button>
+        <button class="btn btn-secondary" onclick="window.open('/redis-queue.html', '_blank')">🌐 Open Live Queue Monitor</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script src="/static/js/script.js"></script>
+</body>
+</html>

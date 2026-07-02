@@ -4,6 +4,7 @@ import hashlib
 import ipaddress
 import math
 import re
+import socket
 import struct
 import subprocess
 import sys
@@ -258,16 +259,31 @@ _WHOIS_SERVERS = [
 
 def _try_whois_server(server: str, asn_num: str, keys: list[str]) -> list[str]:
     """Query a whois server for an ASN, return list of prefix strings."""
+    output = ""
+    # Try using pure Python socket first (zero dependencies)
     try:
-        result = subprocess.run(
-            ["whois", "-h", server, f"AS{asn_num}"],
-            capture_output=True, text=True, timeout=15,
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired, Exception):
-        return []
+        with socket.create_connection((server, 43), timeout=10.0) as s:
+            s.sendall(f"AS{asn_num}\r\n".encode("utf-8"))
+            chunks = []
+            while True:
+                chunk = s.recv(4096)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            output = b"".join(chunks).decode("utf-8", errors="ignore")
+    except Exception:
+        # Fallback to subprocess whois command if socket connection fails
+        try:
+            result = subprocess.run(
+                ["whois", "-h", server, f"AS{asn_num}"],
+                capture_output=True, text=True, timeout=15,
+            )
+            output = result.stdout
+        except (FileNotFoundError, subprocess.TimeoutExpired, Exception):
+            return []
 
     prefixes: list[str] = []
-    for line in result.stdout.splitlines():
+    for line in output.splitlines():
         line_lower = line.lower().strip()
         for key in keys:
             if line_lower.startswith(key):

@@ -101,6 +101,8 @@ async def send_rtsp(ip: str, port: int, request: bytes,
                 if not chunk:
                     break
                 response += chunk
+                if len(response) > 65536:  # 64KB header limit
+                    return _err("header_too_large")
             except asyncio.TimeoutError:
                 break
 
@@ -116,6 +118,9 @@ async def send_rtsp(ip: str, port: int, request: bytes,
                 except ValueError:
                     pass
                 break
+
+        if content_length > 2 * 1024 * 1024:  # 2MB response body limit
+            return _err("body_too_large")
 
         bytes_needed = content_length - len(body_initial)
         if bytes_needed > 0:

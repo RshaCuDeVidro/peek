@@ -38,8 +38,48 @@ _FIELD_MAP = {
 }
 
 
+async def _probe_port(ip: str, port: int, timeout: float, request: bytes) -> OnvifInfo | None:
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(ip, port), timeout=timeout
+        )
+    except (asyncio.TimeoutError, OSError):
+        return None
+
+    try:
+        writer.write(request)
+        await writer.drain()
+
+        response = b""
+        while True:
+            try:
+                chunk = await asyncio.wait_for(reader.read(4096), timeout=timeout)
+                if not chunk:
+                    break
+                response += chunk
+            except asyncio.TimeoutError:
+                break
+
+        text = response.decode(errors="replace")
+        if "GetDeviceInformationResponse" not in text:
+            return None
+
+        info = _parse_device_info(text)
+        if info and info.manufacturer:
+            return info
+    except Exception:
+        return None
+    finally:
+        try:
+            writer.close()
+            await writer.wait_closed()
+        except Exception:
+            pass
+    return None
+
+
 async def probe_onvif(ip: str, timeout: float = ONVIF_TIMEOUT) -> OnvifInfo | None:
-    """Try GetDeviceInformation on common ONVIF ports. Returns info or None."""
+    """Try GetDeviceInformation on common ONVIF ports concurrently. Returns info or None."""
     request = (
         f"POST {_ONVIF_PATH} HTTP/1.1\r\n"
         f"Host: {ip}\r\n"
@@ -50,44 +90,17 @@ async def probe_onvif(ip: str, timeout: float = ONVIF_TIMEOUT) -> OnvifInfo | No
         f"{_GET_DEVICE_INFO_SOAP}"
     ).encode()
 
-    for port in ONVIF_PORTS:
-        try:
-            reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(ip, port), timeout=timeout
-            )
-        except (asyncio.TimeoutError, OSError):
-            continue
-
-        try:
-            writer.write(request)
-            await writer.drain()
-
-            response = b""
-            while True:
-                try:
-                    chunk = await asyncio.wait_for(reader.read(4096), timeout=timeout)
-                    if not chunk:
-                        break
-                    response += chunk
-                except asyncio.TimeoutError:
-                    break
-
-            text = response.decode(errors="replace")
-            if "GetDeviceInformationResponse" not in text:
-                continue
-
-            info = _parse_device_info(text)
-            if info and info.manufacturer:
-                return info
-        except Exception:
-            continue
-        finally:
-            try:
-                writer.close()
-                await writer.wait_closed()
-            except Exception:
-                pass
-
+    tasks = [asyncio.create_task(_probe_port(ip, port, timeout, request)) for port in ONVIF_PORTS]
+    try:
+        for coro in asyncio.as_completed(tasks):
+            res = await coro
+            if res:
+                for t in tasks:
+                    if not t.done():
+                        t.cancel()
+                return res
+    except Exception:
+        pass
     return None
 
 

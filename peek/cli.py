@@ -16,12 +16,20 @@ DEFAULT_TIMEOUT = 5.0
 DEFAULT_WORKERS = 50
 
 DEFAULT_PATHS = [
-    "/", "/stream", "/live", "/cam/realmonitor", "/onvif1",
-    "/Streaming/Channels/101", "/h264", "/av0_0", "/media/video1",
-    "/axis-media/media.amp", "/live/ch00_0", "/live/ch01_0",
-    "/video1", "/h264.sdp", "/mpeg4", "/mpeg4cif",
-    "/11", "/12", "/play1.sdp", "/realplay",
-    "/cam/live", "/cam/replay", "/live0", "/live1",
+    # Top generic/common paths
+    "/", "/stream", "/live", "/video1",
+    # Dahua / Intelbras
+    "/cam/realmonitor", "/cam/live",
+    # Hikvision
+    "/Streaming/Channels/101", "/h264",
+    # Other common fallbacks
+    "/media/video1", "/h264.sdp", "/live/ch00_0",
+    # Axis Specific
+    "/axis-media/media.amp",
+    # Niche paths / secondary channels
+    "/onvif1", "/av0_0", "/live/ch01_0", "/mpeg4", "/mpeg4cif",
+    "/11", "/12", "/play1.sdp", "/realplay", "/cam/replay", "/live0", "/live1",
+    # Obsolete / very rare paths
     "/tvSAN", "/doc/page/login.asp",
 ]
 
@@ -240,10 +248,8 @@ def main() -> None:
                         help="ASN to fetch prefixes from (repeatable, e.g. --asn AS28573)")
     parser.add_argument("--limit", type=int, default=0, dest="asn_limit",
                         help="Max prefixes to use per ASN (0 = all)")
-    parser.add_argument("--max-cidr", type=int, default=16, dest="max_cidr",
-                        help="Skip prefixes larger than /N (default: 16)")
-    parser.add_argument("--sample", type=int, default=0, dest="sample_size", metavar="N",
-                        help="Sample N IPs from large CIDRs via Feistel (0 = expand all)")
+    parser.add_argument("--sample", type=int, default=2000, dest="sample_size", metavar="N",
+                        help="Sample N IPs per large CIDR (default: 2000, 0 = expand all)")
     parser.add_argument("-w", "--workers", type=int, default=DEFAULT_WORKERS,
                         help=f"Concurrency (default: {DEFAULT_WORKERS})")
     parser.add_argument("-t", "--timeout", type=float, default=DEFAULT_TIMEOUT,
@@ -268,8 +274,19 @@ def main() -> None:
     parser.add_argument("--csv", dest="csv_output", metavar="FILE", help="Export CSV")
     parser.add_argument("--save", dest="save_file", metavar="FILE",
                         help="Save open RTSP URLs to file")
+    parser.add_argument("--web", action="store_true",
+                        help="Launch the web-based scan dashboard")
+    parser.add_argument("--web-port", type=int, default=8000,
+                        help="Port to run the web server on (default: 8000)")
+    parser.add_argument("--web-host", default="127.0.0.1",
+                        help="Host interface to run the web server on (default: 127.0.0.1)")
 
     args = parser.parse_args()
+
+    if args.web:
+        from peek.web_server import run_web_server
+        run_web_server(host=args.web_host, port=args.web_port)
+        sys.exit(0)
 
     paths = list(DEFAULT_PATHS)
     if args.paths_file:

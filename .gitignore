@@ -24,3 +24,10 @@ env/
 snapshots/
 *_abertas.txt
 open_streams.txt
+
+# Local databases and user configuration
+peek.db
+*.db
+settings.json
+redis_settings.json
+exports/
